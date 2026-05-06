@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>香港巴士 ETA</title>
+    <!-- 引入 Tailwind CSS 核心 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* iOS Safari 安全區域適配與原生質感優化 */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #F2F2F7; /* iOS 預設背景灰 */
+            -webkit-tap-highlight-color: transparent;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+        }
+
+        /* 隱藏滾動條但保持可滾動 */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* 底部彈窗動畫 */
+        @keyframes slideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+        .animate-slide-up {
+            animation: slideUp 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+        }
+
+        /* 點擊反饋 */
+        .active-scale:active {
+            transform: scale(0.98);
+            background-color: #E5E5EA;
+        }
+    </style>
+</head>
+<body class="text-gray-900 h-screen flex flex-col overflow-hidden">
+
+    <!-- 全局載入畫面 (首次獲取數據時顯示) -->
+    <div id="global-loader" class="fixed inset-0 bg-white z-50 flex flex-col items-center justify-center transition-opacity duration-300">
+        <svg class="animate-spin h-10 w-10 text-blue-500 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <p class="text-gray-500 font-medium">正在同步巴士數據...</p>
+    </div>
+
+    <!-- 頂部導航欄 (毛玻璃效果) -->
+    <header class="bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 py-3 sticky top-0 z-30 flex items-center h-14 shrink-0">
+        <button id="btn-back" class="hidden min-w-[44px] min-h-[44px] -ml-2 text-blue-500 flex items-center justify-center" aria-label="返回">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+        </button>
+        <h1 id="header-title" class="text-lg font-semibold flex-1 text-center truncate">搜尋路線</h1>
+        <div class="w-[44px]"></div> <!-- 佔位符以保持標題置中 -->
+    </header>
+
+    <!-- 視圖 1：路線搜尋 -->
+    <div id="view-search" class="flex-1 overflow-y-auto no-scrollbar p-4">
+        <!-- 搜尋輸入框 -->
+        <div class="relative mb-4">
+            <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+            </div>
+            <input type="text" id="search-input" placeholder="輸入巴士路線 (例: 1A, 978)" 
+                   class="w-full bg-gray-200 border-none text-gray-900 rounded-xl py-3 pl-10 pr-4 text-lg focus:ring-2 focus:ring-blue-500 focus:outline-none transition-shadow h-[48px]">
+        </div>
+        
+        <!-- 路線結果列表 -->
+        <div id="route-list" class="space-y-3">
+            <!-- 動態生成路線卡片 -->
+        </div>
+    </div>
+
+    <!-- 視圖 2：路線詳情 (方向選擇與站點列表) -->
+    <div id="view-route-detail" class="hidden flex-1 flex flex-col overflow-hidden">
+        <!-- 方向選擇器 (iOS Segmented Control 風格) -->
+        <div class="px-4 py-3 bg-white border-b border-gray-200 shrink-0">
+            <div class="bg-gray-200 p-1 rounded-lg flex text-sm font-medium" id="direction-tabs">
+                <!-- 動態生成方向按鈕 -->
+            </div>
+        </div>
+
+        <!-- 站點列表 -->
+        <div class="flex-1 overflow-y-auto no-scrollbar bg-white">
+            <div id="stop-loading" class="hidden py-10 flex justify-center text-blue-500">
+                <svg class="animate-spin h-8 w-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+            </div>
+            <ul id="stop-list" class="divide-y divide-gray-100">
+                <!-- 動態生成站點列表 -->
+            </ul>
+        </div>
+    </div>
+
+    <!-- 視圖 3：ETA 底部彈窗 (Bottom Sheet) -->
+    <div id="eta-modal" class="fixed inset-0 z-50 hidden">
+        <!-- 黑色半透明背景 -->
+        <div class="absolute inset-0 bg-black/40 transition-opacity" id="eta-backdrop"></div>
+        
+        <!-- 彈窗內容 -->
+        <div class="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl shadow-2xl animate-slide-up flex flex-col max-h-[80vh]">
+            <!-- 拖拽條指示 -->
+            <div class="w-full flex justify-center pt-3 pb-1 shrink-0">
+                <div class="w-12 h-1.5 bg-gray-300 rounded-full"></div>
+            </div>
+            
+            <div class="px-6 pb-2 pt-2 flex justify-between items-center shrink-0 border-b border-gray-100">
+                <div>
+                    <h2 id="eta-stop-name" class="text-xl font-bold text-gray-900 truncate">站點名稱</h2>
+                    <p id="eta-route-info" class="text-sm text-gray-500">路線號碼</p>
+                </div>
+                <button id="btn-close-eta" class="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center text-gray-500 active:bg-gray-200">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+
+            <!-- ETA 內容區 -->
+            <div id="eta-content" class="p-6 overflow-y-auto no-scrollbar space-y-4">
+                <!-- 動態生成 ETA 卡片或載入狀態 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript 邏輯 -->
+    <script>
+        // --- 全局狀態 ---
+        let allRoutes = [];      // 存放九巴與城巴合併後的路線清單
+        let stopsDict = {};      // 站點字典：stopId -> stopName (極大提高渲染效率)
+        
+        // 當前選擇的路線狀態
+        let currentRoute = null; 
+        let currentDirection = 'outbound'; 
+        let routeStopsData = { outbound: [], inbound: [] };
+
+        // DOM 元素參考
+        const dom = {
+            loader: document.getElementById('global-loader'),
+            viewSearch: document.getElementById('view-search'),
+            viewRouteDetail: document.getElementById('view-route-detail'),
+            btnBack: document.getElementById('btn-back'),
+            headerTitle: document.getElementById('header-title'),
+            searchInput: document.getElementById('search-input'),
+            routeList: document.getElementById('route-list'),
+            directionTabs: document.getElementById('direction-tabs'),
+            stopList: document.getElementById('stop-list'),
+            stopLoading: document.getElementById('stop-loading'),
+            etaModal: document.getElementById('eta-modal'),
+            etaBackdrop: document.getElementById('eta-backdrop'),
+            btnCloseEta: document.getElementById('btn-close-eta'),
+            etaStopName: document.getElementById('eta-stop-name'),
+            etaRouteInfo: document.getElementById('eta-route-info'),
+            etaContent: document.getElementById('eta-content')
+        };
+
+        // --- 初始化：並發獲取所有路線與站點 ---
+        async function initApp() {
+            try {
+                // 使用 Promise.all 並發獲取 KMB 和 CTB 的數據
+                const [kmbRouteRes, kmbStopRes, ctbRouteRes] = await Promise.all([
+                    fetch('https://data.etabus.gov.hk/v1/transport/kmb/route/'),
+                    fetch('https://data.etabus.gov.hk/v1/transport/kmb/stop'),
+                    fetch('https://rt.data.gov.hk/v1/transport/citybus-nwfb/route/ctb')
+                ]);
+
+                const [kmbRoute, kmbStop, ctbRoute] = await Promise.all([
+                    kmbRouteRes.json(), kmbStopRes.json(), ctbRouteRes.json()
+                ]);
+
+                // 1. 建立站點名稱字典 (避免後續不斷請求 API)
+                // KMB 可以一次獲取所有站點，但城巴 API 沒有這個全量端點
+                if (kmbStop && kmbStop.data) {
+                    kmbStop.data.forEach(s => stopsDict[s.stop] = s.name_tc);
+                }
+
+                // 2. 處理九巴路線 (過濾服務類型 1 為常規路線，並去重)
+                const kmbMap = new Map();
+                kmbRoute.data.forEach(r => {
+                    if (r.service_type !== '1') return;
+                    if (!kmbMap.has(r.route)) {
+                        kmbMap.set(r.route, {
+                            company: 'KMB',
+                            route: r.route,
+                            orig: r.orig_tc,
+                            dest: r.dest_tc
+                        });
+                    }
+                });
+
+                // 3. 處理城巴路線
+                const ctbList = ctbRoute.data.map(r => ({
+                    company: 'CTB',
+                    route: r.route,
+                    orig: r.orig_tc,
+                    dest: r.dest_tc
+                }));
+
+                // 合併數據
+                allRoutes = [...Array.from(kmbMap.values()), ...ctbList];
+
+                // 隱藏載入畫面
+                dom.loader.classList.add('opacity-0');
+                setTimeout(() => dom.loader.classList.add('hidden'), 300);
+
+                // 預設渲染空搜尋提示
+                renderRouteList([]);
+
+            } catch (error) {
+                console.error(error);
+                dom.loader.innerHTML = `
+                    <div class="text-red-500 mb-2"><svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg></div>
+                    <p class="text-gray-800 font-medium">數據載入失敗</p>
+                    <p class="text-sm text-gray-500 mt-1">請檢查網絡或稍後重試</p>
+                `;
+            }
+        }
+
+        // --- 視圖控制與事件綁定 ---
+
+        // 搜尋輸入事件 (即時過濾)
+        dom.searchInput.addEventListener('input', (e) => {
+            const query = e.target.value.trim().toUpperCase();
+            if (!query) {
+                renderRouteList([]);
+                return;
+            }
+            // 過濾並限制最多顯示 30 筆，保持介面流暢
+            const filtered = allRoutes.filter(r => r.route.toUpperCase().includes(query)).slice(0, 30);
+            renderRouteList(filtered);
+        });
+
+        // 返回按鈕事件
+        dom.btnBack.addEventListener('click', () => {
+            dom.viewRouteDetail.classList.add('hidden');
+            dom.viewSearch.classList.remove('hidden');
+            dom.btnBack.classList.add('hidden');
+            dom.headerTitle.textContent = '搜尋路線';
+            currentRoute = null;
+        });
+
+        // 關閉 ETA 彈窗
+        const closeEtaModal = () => {
+            const modalInner = dom.etaModal.querySelector('.animate-slide-up');
+            modalInner.style.animation = 'slideDown 0.3s cubic-bezier(0.32, 0.72, 0, 1) forwards';
+            dom.etaBackdrop.classList.add('opacity-0');
+            setTimeout(() => {
+                dom.etaModal.classList.add('hidden');
+                modalInner.style.animation = ''; // Reset
+                dom.etaBackdrop.classList.remove('opacity-0');
+            }, 300);
+        };
+        dom.btnCloseEta.addEventListener('click', closeEtaModal);
+        dom.etaBackdrop.addEventListener('click', closeEtaModal);
+
+        // 新增 slideDown 動畫
+        document.styleSheets[0].insertRule(`
+            @keyframes slideDown {
+                from { transform: translateY(0); }
+                to { transform: translateY(100%); }
+            }
+        `, document.styleSheets[0].cssRules.length);
+
+
+        // --- 核心渲染函數 ---
+
+        // 渲染路線清單
+        function renderRouteList(routes) {
+            if (routes.length === 0) {
+                const query = dom.searchInput.value.trim();
+                dom.routeList.innerHTML = query 
+                    ? `<div class="text-center py-10 text-gray-500">找不到包含 "${query}" 的路線</div>`
+                    : `<div class="text-center py-10 text-gray-400">請在上方輸入路線號碼<br><span class="text-sm">例如: 1A, 978, A11</span></div>`;
+                return;
+            }
+
+            const html = routes.map(r => {
+                // 區分巴士公司徽章顏色
+                const badgeColor = r.company === 'KMB' ? 'bg-red-500' : 'bg-yellow-500';
+                
+                return `
+                <div class="bg-white rounded-2xl shadow-sm p-4 flex items-center active-scale transition-colors cursor-pointer"
+                     onclick="openRoute('${r.company}', '${r.route}', '${r.orig}', '${r.dest}')">
+                    <div class="${badgeColor} text-white font-bold rounded-lg w-14 h-10 flex items-center justify-center shrink-0 shadow-sm text-lg">
+                        ${r.route}
+                    </div>
+                    <div class="ml-4 flex-1 truncate">
+                        <div class="text-gray-900 font-semibold truncate text-lg">${r.dest}</div>
+                        <div class="text-gray-500 text-sm flex items-center mt-0.5">
+                            <span class="inline-block w-4 h-4 mr-1 opacity-70"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg></span>
+                            從 ${r.orig}
+                        </div>
+                    </div>
+                    <div class="text-gray-300 ml-2 shrink-0">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                    </div>
+                </div>
+                `;
+            }).join('');
+            
+            dom.routeList.innerHTML = html;
+        }
+
+        // 進入路線詳情
+        async function openRoute(company, route, orig, dest) {
+            currentRoute = { company, route, orig, dest };
+            
+            // 切換視圖
+            dom.viewSearch.classList.add('hidden');
+            dom.viewRouteDetail.classList.remove('hidden');
+            dom.btnBack.classList.remove('hidden');
+            dom.headerTitle.textContent = `${company === 'KMB' ? '九巴' : '城巴'} ${route}`;
+            
+            // 初始化狀態
+            dom.stopList.innerHTML = '';
+            dom.stopLoading.classList.remove('hidden');
+            dom.directionTabs.innerHTML = '';
+            routeStopsData = { outbound: [], inbound: [] };
+            currentDirection = 'outbound'; // 預設
+
+            try {
+                // 並發獲取雙向站點列表 (KMB 與 CTB 的 API 路徑不同)
+                if (company === 'KMB') {
+                    const [outRes, inRes] = await Promise.all([
+                        fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route-stop/${route}/outbound/1`),
+                        fetch(`https://data.etabus.gov.hk/v1/transport/kmb/route-stop/${route}/inbound/1`)
+                    ]);
+                    const [outData, inData] = await Promise.all([outRes.json(), inRes.json()]);
+                    routeStopsData.outbound = outData.data || [];
+                    routeStopsData.inbound = inData.data || [];
+                } else {
+                    const [outRes, inRes] = await Promise.all([
+                        fetch(`https://rt.data.gov.hk/v1/transport/citybus-nwfb/route-stop/ctb/${route}/outbound`),
+                        fetch(`https://rt.data.gov.hk/v1/transport/citybus-nwfb/route-stop/ctb/${route}/inbound`)
+                    ]);
+                    const [outData, inData] = await Promise.all([outRes.json(), inRes.json()]);
+                    routeStopsData.outbound = outData.data || [];
+                    routeStopsData.inbound = inData.data || [];
+                }
+
+                // --- 新增：針對城巴 (CTB) 動態拉取缺失的站點名稱字典 ---
+                if (company === 'CTB') {
+                    const allStops = [...routeStopsData.outbound, ...routeStopsData.inbound];
+                    const missingStops = [...new Set(allStops.map(s => s.stop))].filter(id => !stopsDict[id]);
+                    
+                    if (missingStops.length > 0) {
+                        await Promise.all(missingStops.map(async (stopId) => {
+                            try {
+                                const res = await fetch(`https://rt.data.gov.hk/v1/transport/citybus-nwfb/stop/${stopId}`);
+                                const json = await res.json();
+                                if (json && json.data) {
+                                    stopsDict[stopId] = json.data.name_tc;
+                                }
+                            } catch (e) {
+                                console.error('Failed to fetch CTB stop name', stopId, e);
+                            }
+                        }));
+                    }
+                }
+
+                // 判斷該路線是否有某些方向 (環狀線可能只有單向)
+                if (routeStopsData.outbound.length === 0 && routeStopsData.inbound.length > 0) {
+                    currentDirection = 'inbound';
+                }
+
+                renderDirectionTabs();
+                renderStops();
+
+            } catch (error) {
+                console.error(error);
+                dom.stopLoading.classList.add('hidden');
+                dom.stopList.innerHTML = `<div class="p-6 text-center text-red-500">獲取站點失敗，請重試。</div>`;
+            }
+        }
+
+        // 渲染方向切換標籤
+        function renderDirectionTabs() {
+            const hasOutbound = routeStopsData.outbound.length > 0;
+            const hasInbound = routeStopsData.inbound.length > 0;
+            let html = '';
+
+            const createTab = (dir, label, isActive) => `
+                <button onclick="switchDirection('${dir}')" 
+                        class="flex-1 py-2 text-center rounded-md transition-all duration-200 ${isActive ? 'bg-white shadow-sm text-gray-900 font-bold' : 'text-gray-500 hover:text-gray-700'}">
+                    往 ${label}
+                </button>
+            `;
+
+            if (hasOutbound) html += createTab('outbound', currentRoute.dest, currentDirection === 'outbound');
+            if (hasInbound) html += createTab('inbound', currentRoute.orig, currentDirection === 'inbound');
+
+            dom.directionTabs.innerHTML = html;
+        }
+
+        // 切換方向
+        window.switchDirection = function(dir) {
+            if (currentDirection === dir) return;
+            currentDirection = dir;
+            renderDirectionTabs();
+            renderStops();
+        };
+
+        // 渲染站點列表
+        function renderStops() {
+            dom.stopLoading.classList.add('hidden');
+            const stops = routeStopsData[currentDirection];
+
+            if (stops.length === 0) {
+                dom.stopList.innerHTML = `<div class="p-6 text-center text-gray-500">無此方向站點數據。</div>`;
+                return;
+            }
+
+            const html = stops.map((s, index) => {
+                // 從字典中快速查出中文站名
+                const stopName = stopsDict[s.stop] || '未知站點';
+                return `
+                <li class="active-scale transition-colors cursor-pointer min-h-[60px] px-4 py-3 flex items-center"
+                    onclick="openETA('${s.stop}', '${stopName}')">
+                    <div class="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-sm shrink-0 mr-3">
+                        ${index + 1}
+                    </div>
+                    <div class="flex-1 text-gray-900 font-medium text-lg">${stopName}</div>
+                    <div class="text-blue-500 ml-2 shrink-0">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    </div>
+                </li>
+                `;
+            }).join('');
+
+            dom.stopList.innerHTML = html;
+            // 回到頂部
+            dom.viewRouteDetail.querySelector('.overflow-y-auto').scrollTop = 0;
+        }
+
+        // --- ETA 相關處理 ---
+
+        // 開啟 ETA 視窗並獲取數據
+        async function openETA(stopId, stopName) {
+            dom.etaStopName.textContent = stopName;
+            dom.etaRouteInfo.textContent = `${currentRoute.company === 'KMB' ? '九巴' : '城巴'} ${currentRoute.route} (往 ${currentDirection === 'outbound' ? currentRoute.dest : currentRoute.orig})`;
+            
+            // 顯示 Loading
+            dom.etaContent.innerHTML = `
+                <div class="py-8 flex justify-center">
+                    <svg class="animate-spin h-8 w-8 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                </div>
+            `;
+            
+            dom.etaModal.classList.remove('hidden');
+
+            try {
+                let etaData = [];
+                // 獲取 ETA
+                if (currentRoute.company === 'KMB') {
+                    const res = await fetch(`https://data.etabus.gov.hk/v1/transport/kmb/eta/${stopId}/${currentRoute.route}/1`);
+                    const data = await res.json();
+                    etaData = data.data || [];
+                } else {
+                    const res = await fetch(`https://rt.data.gov.hk/v1/transport/citybus-nwfb/eta/ctb/${stopId}/${currentRoute.route}`);
+                    const data = await res.json();
+                    etaData = data.data || [];
+                }
+
+                // 過濾符合當前方向的 ETA (O: Outbound, I: Inbound)
+                const targetDir = currentDirection === 'outbound' ? 'O' : 'I';
+                let validETAs = etaData.filter(e => e.dir === targetDir && e.eta);
+
+                // 按時間排序並取前 3 班車
+                validETAs.sort((a, b) => new Date(a.eta) - new Date(b.eta));
+                validETAs = validETAs.slice(0, 3);
+
+                renderETAs(validETAs);
+
+            } catch (error) {
+                console.error(error);
+                dom.etaContent.innerHTML = `<div class="py-6 text-center text-red-500">系統繁忙，無法獲取預計到站時間。</div>`;
+            }
+        }
+
+        // 渲染 ETA 結果
+        function renderETAs(etas) {
+            if (etas.length === 0) {
+                dom.etaContent.innerHTML = `
+                    <div class="py-8 flex flex-col items-center justify-center text-gray-400">
+                        <svg class="w-12 h-12 mb-2 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <p class="text-lg font-medium">暫無班次資料</p>
+                        <p class="text-sm mt-1">可能是服務已結束或尚未開始</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const now = new Date();
+            const html = etas.map((eta, index) => {
+                const etaDate = new Date(eta.eta);
+                const diffMs = etaDate - now;
+                const diffMins = Math.floor(diffMs / 60000);
+                
+                let timeDisplay = '';
+                let colorClass = 'text-gray-800';
+                
+                if (diffMins <= 0) {
+                    timeDisplay = '即將抵達';
+                    colorClass = 'text-red-500 font-bold';
+                } else if (diffMins === 1) {
+                    timeDisplay = '1 分鐘';
+                    colorClass = 'text-orange-500 font-bold';
+                } else {
+                    timeDisplay = `${diffMins} 分鐘`;
+                    if (index === 0) colorClass = 'text-blue-600 font-bold';
+                }
+
+                // 提取具體時間 (例如 14:30)
+                const timeString = etaDate.toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit', hour12: false });
+                const remark = eta.rmk_tc ? `<span class="ml-2 text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">${eta.rmk_tc}</span>` : '';
+
+                return `
+                <div class="bg-gray-50 rounded-xl p-4 flex justify-between items-center border border-gray-100">
+                    <div class="flex flex-col">
+                        <span class="text-gray-500 text-sm mb-1">第 ${index + 1} 班車 ${remark}</span>
+                        <span class="text-lg font-medium text-gray-800">${timeString}</span>
+                    </div>
+                    <div class="text-2xl ${colorClass}">${timeDisplay}</div>
+                </div>
+                `;
+            }).join('');
+
+            dom.etaContent.innerHTML = html;
+        }
+
+        // --- 啟動應用 ---
+        initApp();
+
+    </script>
+</body>
+</html>
